@@ -1,0 +1,180 @@
+Module: ServerlessLink
+Description: Link shortening app
+Requires:
+
+  - Module: LambdaSharpS3PackageLoader
+    Version: 0.5-WIP
+
+Outputs:
+
+  - Export: EventsJsonArchive
+    Value: !GetAtt DynamoDBTable.Arn
+
+Entries:
+
+  - Parameter: RootDomainName
+    Description: The name of the domain for the serverless application
+    Default: serverless.link
+
+  - Variable: RegionWebsiteEndpoint
+    Value: s3-website-us-west-2.amazonaws.com
+    #Value: s3-website-us-east-1.amazonaws.com
+
+  - Variable: Website
+    Entries:
+
+      - Resource: Bucket
+        Type: AWS::S3::Bucket
+        Properties:
+          WebsiteConfiguration:
+            IndexDocument: index.html
+        Entries:
+
+          - Resource: Policy
+            Type: AWS::S3::BucketPolicy
+            Properties:
+              Bucket: !Ref Website::Bucket
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Sid: WebsiteBucketPublicReadAccess
+                    Effect: Allow
+                    Principal: "*"
+                    Action:
+                      - s3:GetObject
+                    Resource: !Sub "${Website::Bucket.Arn}/*"
+
+      - Package: ContentPackage
+        Files: public/
+
+      - Resource: CopyContentToBucket
+        Type: LambdaSharp::S3::Package
+        Properties:
+          SourceBucketName: !Ref DeploymentBucketName
+          SourcePackageKey: !Ref Website::ContentPackage
+          DestinationBucketName: !Ref Website::Bucket
+          DestinationKeyPrefix: ""
+
+      - Resource: DomainRecordSet
+        Type: AWS::Route53::RecordSetGroup
+        Properties:
+          HostedZoneName: !Sub "${RootDomainName}."
+          RecordSets:
+            - AliasTarget:
+                DNSName: !GetAtt Website::CloudfrontDistribution.DomainName
+                HostedZoneId: Z2FDTNDATAQYW2  # This is the default hosted zone id for CloudFront
+              Name: !Ref RootDomainName
+              Type: A
+
+      # Certificate for cloud front distribution.
+      # This must be approved by admin for the CF template to be successful
+      - Resource: Certificate
+        Type: AWS::CertificateManager::Certificate
+        Properties:
+          ValidationMethod: DNS
+          DomainName: !Ref RootDomainName
+
+      - Resource: CloudfrontDistribution
+        Type: AWS::CloudFront::Distribution
+        Properties:
+          DistributionConfig:
+            Aliases:
+              - !Ref RootDomainName
+            DefaultCacheBehavior:
+              AllowedMethods:
+                - GET
+                - HEAD
+              ForwardedValues:
+                QueryString: true
+              TargetOriginId: WebsiteBucket
+              ViewerProtocolPolicy: redirect-to-https
+            Enabled: true
+            Origins:
+              - CustomOriginConfig:
+                  HTTPPort: 80
+                  HTTPSPort: 443
+                  OriginProtocolPolicy: http-only
+                DomainName: !Sub "${Website::Bucket}.${RegionWebsiteEndpoint}"
+                Id: WebsiteBucket
+            PriceClass: PriceClass_100
+            ViewerCertificate:
+              AcmCertificateArn: !Ref Website::Certificate
+              MinimumProtocolVersion: TLSv1
+              SslSupportMethod: sni-only
+
+  - Variable: Api
+    Entries:
+
+      - Variable: DomainName
+        Value: !Sub "m.${RootDomainName}"
+
+      - Resource: DomainRecordSet
+        Type: AWS::Route53::RecordSetGroup
+        Properties:
+          HostedZoneName: !Sub "${RootDomainName}."
+          RecordSets:
+            - AliasTarget:
+                DNSName: !GetAtt Api::GatewayDomain.DistributionDomainName
+                HostedZoneId: Z2FDTNDATAQYW2  # This is the default hosted zone id for CloudFront
+              Name: !Ref Api::DomainName
+              Type: A
+
+      - Resource: DomainMapping
+        Type: AWS::ApiGateway::BasePathMapping
+        Properties:
+          BasePath: ""
+          Stage: !Ref Module::RestApi::Stage
+          DomainName: !Ref Api::GatewayDomain
+          RestApiId: !Ref Module::RestApi
+
+      # Certificate for cloud front distribution.
+      # This must be approved by admin for the CF template to be successful
+      - Resource: Certificate
+        Type: AWS::CertificateManager::Certificate
+        Properties:
+          ValidationMethod: DNS
+          DomainName: !Ref Api::DomainName
+
+      - Resource: GatewayDomain
+        Type: AWS::ApiGateway::DomainName
+        Properties:
+          # Use if you want it to create a cloudfront distribution
+          CertificateArn: !Ref Api::Certificate
+          EndpointConfiguration:
+            Types:
+              - EDGE
+          # RegionalCertificateArn: !Ref AcmApiDomainCertificate
+          # EndpointConfiguration:
+          #   Types:
+          #   - REGIONAL
+          DomainName: !Ref Api::DomainName
+
+  - Resource: DynamoDBTable
+    Scope: "*"
+    Type: AWS::DynamoDB::Table
+    Allow: ReadWrite
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: LinkId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LinkId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ExpirationTime
+        Enabled: true
+
+  - Function: CreateLink
+    Description: TODO - update CreateLink description
+    Memory: 256
+    Timeout: 30
+    Sources:
+      - Api: POST:/
+
+  - Function: ResolveLink
+    Description: TODO - update ResolveLink description
+    Memory: 256
+    Timeout: 30
+    Sources:
+      - Api: GET:/{id}

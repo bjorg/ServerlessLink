@@ -18,3 +18,7 @@ vendor/*
 .serverless
 .idea
 serverless.yml
+
+# .NET Core
+bin
+obj
