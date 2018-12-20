@@ -1,4 +1,5 @@
 Module: ServerlessLink
+Version: 1.0
 Description: Link shortening app
 Requires:
 
@@ -14,11 +15,21 @@ Entries:
 
   - Parameter: RootDomainName
     Description: The name of the domain for the serverless application
-    Default: serverless.link
+    Default: mindtouch.mx
+
+  - Variable: SubDomainName
+    Value: !Sub "link.${RootDomainName}"
 
   - Variable: RegionWebsiteEndpoint
-    Value: s3-website-us-west-2.amazonaws.com
-    #Value: s3-website-us-east-1.amazonaws.com
+    Value: s3-website-us-east-1.amazonaws.com
+
+  # - Resource: AssertUsEast1
+  #   Type: LambdaSharp::Assert
+  #   Condition: ApiCertifcateArn::Created
+  #   Properties:
+  #     Expression: !Ref AWS::Region
+  #     StringEquals: us-east-1
+  #     FailureReason: "region must be us-east-1"
 
   - Variable: Website
     Entries:
@@ -49,11 +60,31 @@ Entries:
 
       - Resource: CopyContentToBucket
         Type: LambdaSharp::S3::Package
+        # Type: LambdaSharp::S3::UnzipPackage
         Properties:
           SourceBucketName: !Ref DeploymentBucketName
           SourcePackageKey: !Ref Website::ContentPackage
           DestinationBucketName: !Ref Website::Bucket
           DestinationKeyPrefix: ""
+
+      # - Resource: WriteConfigFile
+      #   Type: LambdaSharp::S3::WriteFile
+      #   Properties:
+      #     DestinationBucketName: !Ref Website::Bucket
+      #     DestinationKey: js/config.js
+      #     ContentType: json|yaml
+      #     Contents:
+      #       "window._config":
+      #           api:
+      #             invokeUrl: !Ref Api::DomainName
+      #             scheme: https
+      #     Contents: !Join
+      #       - ""
+      #       - - "window._config = {"
+      #         - "  api: {"
+      #         - !Sub "    invokeUrl: \"${Api::DomainName}\""
+      #         - "  }"
+      #         - "}"
 
       - Resource: DomainRecordSet
         Type: AWS::Route53::RecordSetGroup
@@ -63,7 +94,7 @@ Entries:
             - AliasTarget:
                 DNSName: !GetAtt Website::CloudfrontDistribution.DomainName
                 HostedZoneId: Z2FDTNDATAQYW2  # This is the default hosted zone id for CloudFront
-              Name: !Ref RootDomainName
+              Name: !Ref SubDomainName
               Type: A
 
       # Certificate for cloud front distribution.
@@ -72,14 +103,14 @@ Entries:
         Type: AWS::CertificateManager::Certificate
         Properties:
           ValidationMethod: DNS
-          DomainName: !Ref RootDomainName
+          DomainName: !Ref SubDomainName
 
       - Resource: CloudfrontDistribution
         Type: AWS::CloudFront::Distribution
         Properties:
           DistributionConfig:
             Aliases:
-              - !Ref RootDomainName
+              - !Ref SubDomainName
             DefaultCacheBehavior:
               AllowedMethods:
                 - GET
@@ -106,7 +137,7 @@ Entries:
     Entries:
 
       - Variable: DomainName
-        Value: !Sub "m.${RootDomainName}"
+        Value: !Sub "m.${SubDomainName}"
 
       - Resource: DomainRecordSet
         Type: AWS::Route53::RecordSetGroup
@@ -115,7 +146,7 @@ Entries:
           RecordSets:
             - AliasTarget:
                 DNSName: !GetAtt Api::GatewayDomain.DistributionDomainName
-                HostedZoneId: Z2FDTNDATAQYW2  # This is the default hosted zone id for CloudFront
+                HostedZoneId: Z1UJRXOUMOOFQ8 # Z2FDTNDATAQYW2  # This is the default hosted zone id for CloudFront
               Name: !Ref Api::DomainName
               Type: A
 
@@ -139,14 +170,14 @@ Entries:
         Type: AWS::ApiGateway::DomainName
         Properties:
           # Use if you want it to create a cloudfront distribution
-          CertificateArn: !Ref Api::Certificate
-          EndpointConfiguration:
-            Types:
-              - EDGE
-          # RegionalCertificateArn: !Ref AcmApiDomainCertificate
+          # CertificateArn: !Ref Api::Certificate
           # EndpointConfiguration:
           #   Types:
-          #   - REGIONAL
+          #     - EDGE
+          RegionalCertificateArn: !Ref Api::Certificate
+          EndpointConfiguration:
+            Types:
+            - REGIONAL
           DomainName: !Ref Api::DomainName
 
   - Resource: DynamoDBTable
